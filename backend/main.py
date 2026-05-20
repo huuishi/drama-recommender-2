@@ -1,11 +1,11 @@
 import os
 import json
-import requests
+import re
+import httpx
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from google import genai
-from google.genai import types
 
 load_dotenv()
 
@@ -14,25 +14,34 @@ app = FastAPI()
 # Allow requests from the frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust this in production
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=["*"],  # Should usually only allow frontend domain to call backend
+    allow_credentials=True,     # Allow browser to include user specific details (cookies) in cross-origin requests
+    allow_methods=["*"],    # Allow HTTP methods (get, post, put, delete)
     allow_headers=["*"],
 )
 
 RECOMMENDATION_CACHE = {}
 
-def get_poster_url(title):
+async def get_poster_url(title):
     try:
-        res = requests.get(f"https://api.tvmaze.com/search/shows?q={title}", timeout=5)
+        async with httpx.AsyncClient(timeout=5) as client:
+            res = await client.get(
+                "https://api.tvmaze.com/search/shows",
+                params={"q": title}
+            )
+
         if res.status_code == 200:
             data = res.json()
+
             if data and len(data) > 0:
-                img = data[0].get('show', {}).get('image', {})
-                if img and img.get('original'):
-                    return img['original']
+                img = data[0].get("show", {}).get("image", {})
+
+                if img and img.get("original"):
+                    return img["original"]
+
     except Exception as e:
         print(f"Error fetching poster for {title}: {e}")
+
     return f"https://via.placeholder.com/300x450/1a1a1a/ffffff?text={title.replace(' ', '+')}"
 
 @app.get("/api/recommendations")
@@ -69,15 +78,23 @@ Return ONLY the raw JSON array. Do not wrap it in markdown code blocks like ```j
         )
         
         text_response = response.text.strip()
-        if text_response.startswith("```json"):
-            text_response = text_response.strip("```json").strip("```").strip()
-        elif text_response.startswith("```"):
-            text_response = text_response.strip("```").strip()
+
+        def clean_json_response(text_response: str) -> str:
+            text_response = text_response.strip()
+
+            match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text_response, re.DOTALL | re.IGNORECASE)
+
+            if match:
+                return match.group(1).strip()
+
+            return text_response
+        
+        text_response = clean_json_response(text_response)
             
         recommendations = json.loads(text_response)
         
         for drama in recommendations:
-            drama["image"] = get_poster_url(drama.get("title", ""))
+            drama["image"] = await get_poster_url(drama.get("title", ""))
             
         RECOMMENDATION_CACHE[query_key] = recommendations
         return recommendations
