@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
 import './index.css'
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '')
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+const isDev = import.meta.env.DEV
 
 const popularDramas = [
   {
@@ -154,17 +155,34 @@ function MainApp({ session }) {
     setError(null)
 
     try {
-      const response = await fetch(`${apiBaseUrl}/api/recommendations?q=${encodeURIComponent(query)}`, {
+      if (!apiBaseUrl && !isDev) {
+        throw new Error('Backend URL is not configured. Add VITE_API_BASE_URL in GitHub Pages secrets, then rerun the deploy workflow.')
+      }
+
+      const recommendationsUrl = `${apiBaseUrl}/api/recommendations?q=${encodeURIComponent(query)}`
+      const response = await fetch(recommendationsUrl, {
         headers: {
           'Bypass-Tunnel-Reminder': 'true'
         }
       })
-      if (!response.ok) throw new Error('Failed to fetch recommendations')
+      if (!response.ok) {
+        let message = `Backend returned ${response.status}.`
+        try {
+          const errorBody = await response.json()
+          message = errorBody.detail || message
+        } catch {
+          // Some proxy/server errors are plain text instead of JSON.
+        }
+        throw new Error(message)
+      }
       const data = await response.json()
       setRecommendations(data)
     } catch (err) {
       console.error(err)
-      setError('An error occurred while fetching recommendations. Check backend.')
+      const message = err.message === 'Failed to fetch'
+        ? 'Could not reach the backend. If you are testing locally, start FastAPI on port 8000. If this is GitHub Pages, set VITE_API_BASE_URL to your Render backend URL and redeploy.'
+        : err.message
+      setError(message)
     } finally {
       setLoading(false)
     }
