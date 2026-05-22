@@ -131,6 +131,7 @@ function MainApp({ session }) {
   const [loadingCollections, setLoadingCollections] = useState(false)
   const [toastMessage, setToastMessage] = useState(null)
   const [successModal, setSuccessModal] = useState(null)
+  const [duplicatePrompt, setDuplicatePrompt] = useState(null)
   const [activeCollectionName, setActiveCollectionName] = useState(null)
   const [collectionMenuOpen, setCollectionMenuOpen] = useState(false)
 
@@ -205,6 +206,30 @@ function MainApp({ session }) {
     }
   }
 
+  useEffect(() => {
+    let isCurrent = true
+
+    const preloadCollections = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('favorites')
+          .select('*')
+          .order('created_at', { ascending: false })
+
+        if (error) throw error
+        if (isCurrent) setCollections(data || [])
+      } catch (error) {
+        console.error('Error preloading collections:', error)
+      }
+    }
+
+    preloadCollections()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
+
   const groupedCollections = collections.reduce((acc, curr) => {
     const name = curr.collection_name || 'My Collections'
     if (!acc[name]) acc[name] = []
@@ -240,23 +265,40 @@ function MainApp({ session }) {
     setCollectionMenuOpen(false)
   }
 
-  const handleSaveCollection = async () => {
-    if (!selectedDrama) return
-    
+  const buildSaveTargets = () => {
     const targets = new Set([...selectedCollections])
     if (newCollectionName.trim()) {
       targets.add(newCollectionName.trim())
     }
-    
+
     if (targets.size === 0) {
       targets.add('My Collections')
     }
-    
-    const insertData = Array.from(targets).map(cName => ({
+
+    return Array.from(targets)
+  }
+
+  const formatCollectionLabel = (collectionNames) => {
+    if (collectionNames.length === 1) return collectionNames[0]
+    return `${collectionNames.slice(0, -1).join(', ')} and ${collectionNames.at(-1)}`
+  }
+
+  const findExistingDramaCollection = (drama, collectionNames) => {
+    const dramaTitle = drama.title.trim().toLowerCase()
+    return collectionNames.find((collectionName) =>
+      collections.some((collection) =>
+        (collection.collection_name || 'My Collections') === collectionName &&
+        collection.drama_title.trim().toLowerCase() === dramaTitle
+      )
+    )
+  }
+
+  const insertDramaIntoCollections = async (drama, collectionNames) => {
+    const insertData = collectionNames.map(cName => ({
       user_id: session.user.id,
-      drama_title: selectedDrama.title,
-      synopsis: selectedDrama.synopsis,
-      image_url: selectedDrama.image,
+      drama_title: drama.title,
+      synopsis: drama.synopsis,
+      image_url: drama.image,
       collection_name: cName
     }))
 
@@ -264,30 +306,53 @@ function MainApp({ session }) {
       const { error } = await supabase
         .from('favorites')
         .insert(insertData)
-        
-      if (error) {
-        if (error.code === '23505') showToast(`This drama is already in some of those collections!`)
-        else throw error
-      } else {
-        const savedCollectionNames = Array.from(targets)
-        const collectionLabel = savedCollectionNames.length === 1
-          ? savedCollectionNames[0]
-          : `${savedCollectionNames.slice(0, -1).join(', ')} and ${savedCollectionNames.at(-1)}`
 
-        setSuccessModal({
-          dramaTitle: selectedDrama.title,
-          collectionName: collectionLabel,
-          image: selectedDrama.image,
-        })
-        fetchCollections()
-      }
+      if (error) throw error
+
+      setSuccessModal({
+        dramaTitle: drama.title,
+        collectionName: formatCollectionLabel(collectionNames),
+        image: drama.image,
+      })
+      fetchCollections()
     } catch (error) {
       console.error('Error saving:', error)
       showToast('Failed to save to collection.')
-    } finally {
-      setIsModalOpen(false)
-      setSelectedDrama(null)
     }
+  }
+
+  const handleSaveCollection = async () => {
+    if (!selectedDrama) return
+
+    const targets = buildSaveTargets()
+    const duplicateCollectionName = findExistingDramaCollection(selectedDrama, targets)
+
+    if (duplicateCollectionName) {
+      setDuplicatePrompt({
+        drama: selectedDrama,
+        collectionNames: targets,
+        collectionName: duplicateCollectionName,
+      })
+      setIsModalOpen(false)
+      return
+    }
+
+    await insertDramaIntoCollections(selectedDrama, targets)
+    setIsModalOpen(false)
+    setSelectedDrama(null)
+  }
+
+  const confirmDuplicateSave = async () => {
+    if (!duplicatePrompt) return
+    const { drama, collectionNames } = duplicatePrompt
+    setDuplicatePrompt(null)
+    setSelectedDrama(null)
+    await insertDramaIntoCollections(drama, collectionNames)
+  }
+
+  const cancelDuplicateSave = () => {
+    setDuplicatePrompt(null)
+    setSelectedDrama(null)
   }
 
   const renameCollection = async (oldName) => {
@@ -568,6 +633,21 @@ function MainApp({ session }) {
           </div>
         )
       })()}
+
+      {duplicatePrompt && (
+        <div className="modal-overlay">
+          <div className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="duplicate-title">
+            <p className="success-kicker">Already saved</p>
+            <h3 id="duplicate-title">
+              This drama already exists in {duplicatePrompt.collectionName}. Do you still want to add it?
+            </h3>
+            <div className="modal-actions">
+              <button className="btn-cancel" onClick={cancelDuplicateSave}>No</button>
+              <button className="btn-save" onClick={confirmDuplicateSave}>Yes</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {successModal && (
         <div className="modal-overlay">
