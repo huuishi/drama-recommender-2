@@ -5,55 +5,32 @@ import './index.css'
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 const isDev = import.meta.env.DEV
 
-const popularDramas = [
-  {
-    title: 'Queen of Tears',
-    poster: 'https://image.tmdb.org/t/p/w342/7ZXLZ3KYL3IVvsSHBZaHjcNQzNU.jpg',
-  },
-  {
-    title: 'Lovely Runner',
-    poster: 'https://image.tmdb.org/t/p/w342/xJQyrif5M4UMoVBrBlwUabtaRxB.jpg',
-  },
-  {
-    title: 'Extraordinary Attorney Woo',
-    poster: 'https://image.tmdb.org/t/p/w342/zuNOQVI4rEaqwknrfQUVKtlKE2C.jpg',
-  },
-  {
-    title: 'Moving',
-    poster: 'https://image.tmdb.org/t/p/w342/vf9SNXNAFqzKBGksFwrXhkg9cb7.jpg',
-  },
-  {
-    title: 'Crash Landing on You',
-    poster: 'https://image.tmdb.org/t/p/w342/jTESfFcPm6TniFWpEBUnQnwtKTC.jpg',
-  },
-  {
-    title: 'The Glory',
-    poster: 'https://image.tmdb.org/t/p/w342/uUM4LVlPgIrww07OoEKrGWlS1Ej.jpg',
-  },
-  {
-    title: 'King the Land',
-    poster: 'https://image.tmdb.org/t/p/w342/tW8BMRCYSe6nySvZ749pzc31x2m.jpg',
-  },
-  {
-    title: 'Hospital Playlist',
-    poster: 'https://image.tmdb.org/t/p/w342/clYgUKk4CzmKpEukW2I2oDg9k1Q.jpg',
-  },
-  {
-    title: 'Twenty Five Twenty One',
-    poster: 'https://image.tmdb.org/t/p/w342/poJMfyThRcTRn3s8VIiJsBMVokd.jpg',
-  },
-]
+function getApiUrl(path) {
+  if (!apiBaseUrl && !isDev) {
+    throw new Error('Backend URL is not configured. Add VITE_API_BASE_URL in GitHub Pages secrets, then rerun the deploy workflow.')
+  }
 
-function PosterMarquee() {
-  const posters = [...popularDramas, ...popularDramas]
+  return `${apiBaseUrl}${path}`
+}
+
+function PosterMarquee({ dramas = [], onOpenDrama }) {
+  if (dramas.length === 0) return null
+
+  const posters = [...dramas, ...dramas]
 
   return (
     <div className="poster-marquee" aria-label="Popular Korean drama posters">
       <div className="poster-track">
         {posters.map((drama, index) => (
-          <div className="poster-tile" key={`${drama.title}-${index}`}>
-            <img src={drama.poster} alt={`${drama.title} poster`} draggable="false" />
-          </div>
+          <button
+            type="button"
+            className="poster-tile"
+            key={`${drama.title}-${index}`}
+            onClick={() => onOpenDrama?.(drama)}
+            aria-label={`Read synopsis for ${drama.title}`}
+          >
+            <img src={drama.image} alt={`${drama.title} poster`} draggable="false" />
+          </button>
         ))}
       </div>
     </div>
@@ -120,7 +97,7 @@ function Auth() {
   )
 }
 
-function MainApp({ session }) {
+function MainApp({ session, popularDramas, loadingPopular, popularError, selectedDetailDrama, setSelectedDetailDrama }) {
   const [query, setQuery] = useState('')
   const [recommendations, setRecommendations] = useState([])
   const [loading, setLoading] = useState(false)
@@ -131,7 +108,6 @@ function MainApp({ session }) {
   const [loadingCollections, setLoadingCollections] = useState(false)
   const [toastMessage, setToastMessage] = useState(null)
   const [successModal, setSuccessModal] = useState(null)
-  const [duplicatePrompt, setDuplicatePrompt] = useState(null)
   const [activeCollectionName, setActiveCollectionName] = useState(null)
   const [collectionMenuOpen, setCollectionMenuOpen] = useState(false)
 
@@ -148,6 +124,15 @@ function MainApp({ session }) {
     }, 3000)
   }
 
+  const openDramaDetail = (drama) => {
+    setSelectedDetailDrama(drama)
+    setCollectionMenuOpen(false)
+  }
+
+  const closeDramaDetail = () => {
+    setSelectedDetailDrama(null)
+  }
+
   const handleSearch = async (e) => {
     e.preventDefault()
     if (!query.trim()) return
@@ -156,11 +141,7 @@ function MainApp({ session }) {
     setError(null)
 
     try {
-      if (!apiBaseUrl && !isDev) {
-        throw new Error('Backend URL is not configured. Add VITE_API_BASE_URL in GitHub Pages secrets, then rerun the deploy workflow.')
-      }
-
-      const recommendationsUrl = `${apiBaseUrl}/api/recommendations?q=${encodeURIComponent(query)}`
+      const recommendationsUrl = getApiUrl(`/api/recommendations?q=${encodeURIComponent(query)}`)
       const response = await fetch(recommendationsUrl, {
         headers: {
           'Bypass-Tunnel-Reminder': 'true'
@@ -178,6 +159,7 @@ function MainApp({ session }) {
       }
       const data = await response.json()
       setRecommendations(data)
+      setSelectedDetailDrama(null)
     } catch (err) {
       console.error(err)
       const message = err.message === 'Failed to fetch'
@@ -206,30 +188,6 @@ function MainApp({ session }) {
     }
   }
 
-  useEffect(() => {
-    let isCurrent = true
-
-    const preloadCollections = async () => {
-      try {
-        const { data, error } = await supabase
-          .from('favorites')
-          .select('*')
-          .order('created_at', { ascending: false })
-
-        if (error) throw error
-        if (isCurrent) setCollections(data || [])
-      } catch (error) {
-        console.error('Error preloading collections:', error)
-      }
-    }
-
-    preloadCollections()
-
-    return () => {
-      isCurrent = false
-    }
-  }, [])
-
   const groupedCollections = collections.reduce((acc, curr) => {
     const name = curr.collection_name || 'My Collections'
     if (!acc[name]) acc[name] = []
@@ -252,6 +210,7 @@ function MainApp({ session }) {
     setActiveTab('collections')
     setActiveCollectionName(null)
     setCollectionMenuOpen(false)
+    setSelectedDetailDrama(null)
     fetchCollections()
   }
 
@@ -265,7 +224,9 @@ function MainApp({ session }) {
     setCollectionMenuOpen(false)
   }
 
-  const buildSaveTargets = () => {
+  const handleSaveCollection = async () => {
+    if (!selectedDrama) return
+
     const targets = new Set([...selectedCollections])
     if (newCollectionName.trim()) {
       targets.add(newCollectionName.trim())
@@ -275,30 +236,11 @@ function MainApp({ session }) {
       targets.add('My Collections')
     }
 
-    return Array.from(targets)
-  }
-
-  const formatCollectionLabel = (collectionNames) => {
-    if (collectionNames.length === 1) return collectionNames[0]
-    return `${collectionNames.slice(0, -1).join(', ')} and ${collectionNames.at(-1)}`
-  }
-
-  const findExistingDramaCollection = (drama, collectionNames) => {
-    const dramaTitle = drama.title.trim().toLowerCase()
-    return collectionNames.find((collectionName) =>
-      collections.some((collection) =>
-        (collection.collection_name || 'My Collections') === collectionName &&
-        collection.drama_title.trim().toLowerCase() === dramaTitle
-      )
-    )
-  }
-
-  const insertDramaIntoCollections = async (drama, collectionNames) => {
-    const insertData = collectionNames.map(cName => ({
+    const insertData = Array.from(targets).map(cName => ({
       user_id: session.user.id,
-      drama_title: drama.title,
-      synopsis: drama.synopsis,
-      image_url: drama.image,
+      drama_title: selectedDrama.title,
+      synopsis: selectedDrama.synopsis,
+      image_url: selectedDrama.image,
       collection_name: cName
     }))
 
@@ -307,52 +249,29 @@ function MainApp({ session }) {
         .from('favorites')
         .insert(insertData)
 
-      if (error) throw error
+      if (error) {
+        if (error.code === '23505') showToast(`This drama is already in this collection`)
+        else throw error
+      } else {
+        const savedCollectionNames = Array.from(targets)
+        const collectionLabel = savedCollectionNames.length === 1
+          ? savedCollectionNames[0]
+          : `${savedCollectionNames.slice(0, -1).join(', ')} and ${savedCollectionNames.at(-1)}`
 
-      setSuccessModal({
-        dramaTitle: drama.title,
-        collectionName: formatCollectionLabel(collectionNames),
-        image: drama.image,
-      })
-      fetchCollections()
+        setSuccessModal({
+          dramaTitle: selectedDrama.title,
+          collectionName: collectionLabel,
+          image: selectedDrama.image,
+        })
+        fetchCollections()
+      }
     } catch (error) {
       console.error('Error saving:', error)
       showToast('Failed to save to collection.')
-    }
-  }
-
-  const handleSaveCollection = async () => {
-    if (!selectedDrama) return
-
-    const targets = buildSaveTargets()
-    const duplicateCollectionName = findExistingDramaCollection(selectedDrama, targets)
-
-    if (duplicateCollectionName) {
-      setDuplicatePrompt({
-        drama: selectedDrama,
-        collectionNames: targets,
-        collectionName: duplicateCollectionName,
-      })
+    } finally {
       setIsModalOpen(false)
-      return
+      setSelectedDrama(null)
     }
-
-    await insertDramaIntoCollections(selectedDrama, targets)
-    setIsModalOpen(false)
-    setSelectedDrama(null)
-  }
-
-  const confirmDuplicateSave = async () => {
-    if (!duplicatePrompt) return
-    const { drama, collectionNames } = duplicatePrompt
-    setDuplicatePrompt(null)
-    setSelectedDrama(null)
-    await insertDramaIntoCollections(drama, collectionNames)
-  }
-
-  const cancelDuplicateSave = () => {
-    setDuplicatePrompt(null)
-    setSelectedDrama(null)
   }
 
   const renameCollection = async (oldName) => {
@@ -445,170 +364,239 @@ function MainApp({ session }) {
     }
   }
 
+  const visibleDramaCards = recommendations.length > 0 ? recommendations : popularDramas
+  const relatedDramas = (recommendations.length > 0 ? recommendations : popularDramas)
+    .filter((drama) => drama.title !== selectedDetailDrama?.title)
+
   return (
     <div className="main-content">
-      <nav className="tabs">
-        <button
-          className={activeTab === 'search' ? 'active' : ''}
-          onClick={() => {
-            setActiveTab('search')
-            setActiveCollectionName(null)
-            setCollectionMenuOpen(false)
-          }}
-        >
-          Discover
-        </button>
-        <button
-          className={activeTab === 'collections' ? 'active' : ''}
-          onClick={openCollections}
-        >
-          My Collections
-        </button>
-        <button className="logout-btn" onClick={() => supabase.auth.signOut()}>
-          Sign Out
-        </button>
-      </nav>
-
-      {activeTab === 'search' && (
-        <div className="search-view">
-          <form onSubmit={handleSearch} className="search-form">
-            <input
-              type="text"
-              className="search-input"
-              placeholder="Enter drama"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <button type="submit" className="search-button">
-              {loading ? 'Searching...' : 'Search'}
+      {selectedDetailDrama ? (
+        <div className="drama-detail-page">
+          <div className="detail-topbar">
+            <button className="back-btn" onClick={closeDramaDetail}>Back</button>
+            <button className="save-btn detail-save-btn" onClick={() => openSaveModal(selectedDetailDrama)}>
+              Save to Collection
             </button>
-          </form>
+          </div>
 
-          {loading && <div className="loading-spinner"></div>}
-          {error && <div className="error">{error}</div>}
-
-          {!loading && recommendations.length > 0 && (
-            <div className="recommendations-grid">
-              {recommendations.map((drama) => (
-                <div key={drama.id} className="drama-card">
-                  <img src={drama.image} alt={drama.title} className="drama-image" />
-                  <div className="drama-info">
-                    <h3 className="drama-title">{drama.title}</h3>
-                    <p className="drama-synopsis">{drama.synopsis}</p>
-                    <button className="save-btn" onClick={() => openSaveModal(drama)}>
-                      Save to Collection
-                    </button>
-                  </div>
-                </div>
-              ))}
+          <div className="detail-hero">
+            <img src={selectedDetailDrama.image} alt={selectedDetailDrama.title} className="detail-poster" />
+            <div className="detail-copy">
+              <p className="success-kicker">Drama synopsis</p>
+              <h2>{selectedDetailDrama.title}</h2>
+              <p>{selectedDetailDrama.synopsis}</p>
             </div>
-          )}
-        </div>
-      )}
+          </div>
 
-      {activeTab === 'collections' && (
-        <div className="collections-view">
-          {!activeCollectionName && (
-            <>
-              <h2>My Collections</h2>
-              {loadingCollections && <div className="loading-spinner"></div>}
-              {!loadingCollections && collections.length === 0 && (
-                <p className="no-results">You haven't saved any dramas yet.</p>
-              )}
-
-              {collectionFolders.length > 0 && (
-                <div className="folder-grid">
-                  {collectionFolders.map(([colName, dramas]) => (
-                    <button
-                      key={colName}
-                      className="folder-card"
-                      onClick={() => openCollectionFolder(colName)}
-                    >
-                      <span className="folder-shape" aria-hidden="true"></span>
-                      <span className="folder-name">{colName}</span>
-                      <span className="folder-count">{dramas.length} {dramas.length === 1 ? 'drama' : 'dramas'}</span>
-                      <span className="folder-preview">
-                        {dramas.slice(0, 3).map((drama) => (
-                          <img key={drama.id} src={drama.image_url} alt="" />
-                        ))}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-
-          {activeCollectionName && (
-            <div className="collection-page">
-              <button className="back-btn" onClick={closeCollectionFolder}>
-                Back to folders
-              </button>
-
-              <div className="collection-page-header">
-              <div>
-                <p className="success-kicker">Collection</p>
-                <h3 id="collection-title">{activeCollectionName}</h3>
-                <p className="collection-modal-count">
-                  {activeCollectionDramas.length} {activeCollectionDramas.length === 1 ? 'drama' : 'dramas'}
-                </p>
-              </div>
-
-              <div className="collection-page-tools">
-                <button className="menu-dot-btn" onClick={() => setCollectionMenuOpen(!collectionMenuOpen)} aria-label="Collection actions">
-                  ...
+          <div className="related-dramas">
+            <h3>{recommendations.length > 0 ? 'Other recommended dramas' : 'Other top Korean dramas'}</h3>
+            <div className="related-link-grid">
+              {relatedDramas.map((drama) => (
+                <button key={drama.id || drama.title} className="related-drama-link" onClick={() => openDramaDetail(drama)}>
+                  {drama.title}
                 </button>
-                {collectionMenuOpen && (
-                  <div className="collection-action-menu">
-                    <button onClick={() => renameCollection(activeCollectionName)}>Rename</button>
-                    <button onClick={() => duplicateCollection(activeCollectionName)}>Duplicate</button>
-                    <button className="danger-action" onClick={() => deleteCollection(activeCollectionName)}>Delete</button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-              <div className="collection-page-grid">
-              {activeCollectionDramas.map((drama) => (
-                <div key={drama.id} className="collection-drama-card">
-                  <img src={drama.image_url} alt={drama.drama_title} />
-                  <div>
-                    <h4>{drama.drama_title}</h4>
-                    <p>{drama.synopsis}</p>
-                    <button className="delete-btn" onClick={() => deleteFavorite(drama.id)}>
-                      Remove
-                    </button>
-                  </div>
-                </div>
               ))}
-              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          <nav className="tabs">
+            <button
+              className={activeTab === 'search' ? 'active' : ''}
+              onClick={() => {
+                setActiveTab('search')
+                setActiveCollectionName(null)
+                setCollectionMenuOpen(false)
+              }}
+            >
+              Discover
+            </button>
+            <button
+              className={activeTab === 'collections' ? 'active' : ''}
+              onClick={openCollections}
+            >
+              My Collections
+            </button>
+            <button className="logout-btn" onClick={() => supabase.auth.signOut()}>
+              Sign Out
+            </button>
+          </nav>
+
+          {activeTab === 'search' && (
+            <div className="search-view">
+              <form onSubmit={handleSearch} className="search-form">
+                <input
+                  type="text"
+                  className="search-input"
+                  placeholder="Enter drama"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+                <button type="submit" className="search-button">
+                  {loading ? 'Searching...' : 'Search'}
+                </button>
+              </form>
+
+              {loading && <div className="loading-spinner"></div>}
+              {error && <div className="error">{error}</div>}
+              {!loading && popularError && recommendations.length === 0 && <div className="error">{popularError}</div>}
+              {!loading && loadingPopular && recommendations.length === 0 && <div className="loading-spinner"></div>}
+
+              {!loading && visibleDramaCards.length > 0 && (
+                <>
+                  {recommendations.length === 0 && (
+                    <div className="popular-section-heading">
+                      <p className="success-kicker">Top 20</p>
+                      <h2>Popular Korean dramas</h2>
+                    </div>
+                  )}
+                  <div className="recommendations-grid">
+                    {visibleDramaCards.map((drama) => (
+                      <div key={drama.id || drama.title} className="drama-card">
+                        <button className="drama-image-button" onClick={() => openDramaDetail(drama)}>
+                          <img src={drama.image} alt={drama.title} className="drama-image" />
+                        </button>
+                        <div className="drama-info">
+                          <h3 className="drama-title">
+                            <button className="drama-title-button" onClick={() => openDramaDetail(drama)}>
+                              {drama.title}
+                            </button>
+                          </h3>
+                          <p className="drama-synopsis">{drama.synopsis}</p>
+                          <button className="save-btn" onClick={() => openSaveModal(drama)}>
+                            Save to Collection
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           )}
-        </div>
+
+          {activeTab === 'collections' && (
+            <div className="collections-view">
+              {!activeCollectionName && (
+                <>
+                  <h2>My Collections</h2>
+                  {loadingCollections && <div className="loading-spinner"></div>}
+                  {!loadingCollections && collections.length === 0 && (
+                    <p className="no-results">You haven't saved any dramas yet.</p>
+                  )}
+
+                  {collectionFolders.length > 0 && (
+                    <div className="folder-grid">
+                      {collectionFolders.map(([colName, dramas]) => (
+                        <button
+                          key={colName}
+                          className="folder-card"
+                          onClick={() => openCollectionFolder(colName)}
+                        >
+                          <span className="folder-shape" aria-hidden="true"></span>
+                          <span className="folder-name">{colName}</span>
+                          <span className="folder-count">{dramas.length} {dramas.length === 1 ? 'drama' : 'dramas'}</span>
+                          <span className="folder-preview">
+                            {dramas.slice(0, 3).map((drama) => (
+                              <img key={drama.id} src={drama.image_url} alt="" />
+                            ))}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {activeCollectionName && (
+                <div className="collection-page">
+                  <button className="back-btn" onClick={closeCollectionFolder}>
+                    Back to folders
+                  </button>
+
+                  <div className="collection-page-header">
+                  <div>
+                    <p className="success-kicker">Collection</p>
+                    <h3 id="collection-title">{activeCollectionName}</h3>
+                    <p className="collection-modal-count">
+                      {activeCollectionDramas.length} {activeCollectionDramas.length === 1 ? 'drama' : 'dramas'}
+                    </p>
+                  </div>
+
+                  <div className="collection-page-tools">
+                    <button className="menu-dot-btn" onClick={() => setCollectionMenuOpen(!collectionMenuOpen)} aria-label="Collection actions">
+                      ...
+                    </button>
+                    {collectionMenuOpen && (
+                      <div className="collection-action-menu">
+                        <button onClick={() => renameCollection(activeCollectionName)}>Rename</button>
+                        <button onClick={() => duplicateCollection(activeCollectionName)}>Duplicate</button>
+                        <button className="danger-action" onClick={() => deleteCollection(activeCollectionName)}>Delete</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                  <div className="collection-page-grid">
+                  {activeCollectionDramas.map((drama) => (
+                    <div key={drama.id} className="collection-drama-card">
+                      <button className="collection-drama-poster" onClick={() => openDramaDetail({
+                        id: drama.id,
+                        title: drama.drama_title,
+                        synopsis: drama.synopsis,
+                        image: drama.image_url,
+                      })}>
+                        <img src={drama.image_url} alt={drama.drama_title} />
+                      </button>
+                      <div>
+                        <h4>
+                          <button className="drama-title-button" onClick={() => openDramaDetail({
+                            id: drama.id,
+                            title: drama.drama_title,
+                            synopsis: drama.synopsis,
+                            image: drama.image_url,
+                          })}>
+                            {drama.drama_title}
+                          </button>
+                        </h4>
+                        <p>{drama.synopsis}</p>
+                        <button className="delete-btn" onClick={() => deleteFavorite(drama.id)}>
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       {isModalOpen && (() => {
         let existingCollections = [...new Set(collections.map(c => c.collection_name || 'My Collections'))]
         if (existingCollections.length === 0) existingCollections.push('My Collections')
-        
+
         return (
           <div className="modal-overlay">
             <div className="modal">
               <h3>Save to Collection</h3>
-              
+
               <div className="collection-list">
                 {existingCollections.map(cName => (
                   <label key={cName}>
-                    <input 
-                      type="checkbox" 
-                      checked={selectedCollections.includes(cName)} 
+                    <input
+                      type="checkbox"
+                      checked={selectedCollections.includes(cName)}
                       onChange={(e) => {
                         if (e.target.checked) {
                           setSelectedCollections([...selectedCollections, cName])
                         } else {
                           setSelectedCollections(selectedCollections.filter(c => c !== cName))
                         }
-                      }} 
+                      }}
                     />
                     {cName}
                   </label>
@@ -616,12 +604,12 @@ function MainApp({ session }) {
               </div>
 
               <div className="new-collection-field">
-                <p>Or create a new collection:</p>
-                <input 
-                  type="text" 
-                  value={newCollectionName} 
+                <p>Create a new collection:</p>
+                <input
+                  type="text"
+                  value={newCollectionName}
                   onChange={(e) => setNewCollectionName(e.target.value)}
-                  placeholder="New collection name..."
+                  placeholder="New collection"
                   autoFocus
                 />
               </div>
@@ -633,21 +621,6 @@ function MainApp({ session }) {
           </div>
         )
       })()}
-
-      {duplicatePrompt && (
-        <div className="modal-overlay">
-          <div className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="duplicate-title">
-            <p className="success-kicker">Already saved</p>
-            <h3 id="duplicate-title">
-              This drama already exists in {duplicatePrompt.collectionName}. Do you still want to add it?
-            </h3>
-            <div className="modal-actions">
-              <button className="btn-cancel" onClick={cancelDuplicateSave}>No</button>
-              <button className="btn-save" onClick={confirmDuplicateSave}>Yes</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {successModal && (
         <div className="modal-overlay">
@@ -661,7 +634,7 @@ function MainApp({ session }) {
                 {successModal.dramaTitle} drama has been added to {successModal.collectionName}.
               </h3>
             </div>
-            <button className="btn-save" onClick={() => setSuccessModal(null)}>Lovely</button>
+            <button className="btn-save" onClick={() => setSuccessModal(null)}>Done</button>
           </div>
         </div>
       )}
@@ -677,11 +650,58 @@ function MainApp({ session }) {
 
 function App() {
   const [session, setSession] = useState(null)
+  const [popularDramas, setPopularDramas] = useState([])
+  const [loadingPopular, setLoadingPopular] = useState(false)
+  const [popularError, setPopularError] = useState(null)
+  const [selectedDetailDrama, setSelectedDetailDrama] = useState(null)
+
+  useEffect(() => {
+    let isCurrent = true
+
+    const fetchPopularDramas = async () => {
+      setLoadingPopular(true)
+      setPopularError(null)
+
+      try {
+        const response = await fetch(getApiUrl('/api/popular-dramas'), {
+          headers: {
+            'Bypass-Tunnel-Reminder': 'true'
+          }
+        })
+
+        if (!response.ok) {
+          let message = `Backend returned ${response.status}.`
+          try {
+            const errorBody = await response.json()
+            message = errorBody.detail || message
+          } catch {
+            // Some proxy/server errors are plain text instead of JSON.
+          }
+          throw new Error(message)
+        }
+
+        const data = await response.json()
+        if (isCurrent) setPopularDramas(data)
+      } catch (error) {
+        console.error('Error fetching popular dramas:', error)
+        if (isCurrent) setPopularError(error.message)
+      } finally {
+        if (isCurrent) setLoadingPopular(false)
+      }
+    }
+
+    fetchPopularDramas()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
 
   useEffect(() => {
     // Check active session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
+      if (!session) setSelectedDetailDrama(null)
     })
 
     // Listen for auth changes
@@ -689,6 +709,7 @@ function App() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
+      if (!session) setSelectedDetailDrama(null)
     })
 
     return () => subscription.unsubscribe()
@@ -696,14 +717,28 @@ function App() {
 
   return (
     <div className="app-container">
-      <PosterMarquee />
+      <PosterMarquee
+        dramas={popularDramas}
+        onOpenDrama={session ? setSelectedDetailDrama : undefined}
+      />
 
       <header>
         <h1>K-Drama Recommender</h1>
         <p className="subtitle">Find your next binge-watch based on your favorites.</p>
       </header>
 
-      {!session ? <Auth /> : <MainApp session={session} />}
+      {!session ? (
+        <Auth />
+      ) : (
+        <MainApp
+          session={session}
+          popularDramas={popularDramas}
+          loadingPopular={loadingPopular}
+          popularError={popularError}
+          selectedDetailDrama={selectedDetailDrama}
+          setSelectedDetailDrama={setSelectedDetailDrama}
+        />
+      )}
     </div>
   )
 }
